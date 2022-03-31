@@ -1,70 +1,35 @@
-### Example configuration for Azure Pipelines ###
-
-# Some of the configuration is copied from https://pastebin.com/u4gUKtYN
-
+# based on https://github.com/realark/cl-sample-game/blob/master/azure-pipelines.yaml
 
 trigger:
-  branches:
-    include: ['*']
-  tags:
-    include: ['*']
+- master
 
 variables:
-  # This URL is pulled out because it's too long to be nicely readable
+  LISP: sbcl-bin
   ROSWELL_ZIP: https://ci.appveyor.com/api/projects/snmsts/roswell-en89n/artifacts/Roswell-x86_64.zip?branch=master&job=Environment%3A%20MSYS2_ARCH%3Dx86_64,%20MSYS2_BITS%3D64,%20MSYSTEM%3DMINGW64,%20METHOD%3Dcross
+
 
 jobs:
   - job: 'Test'
     strategy:
       matrix:
-        # Configure OS and lisp implementations here
-        # Each combination of OS and implementation needs it's own section
-        win_sbcl:
+        win:
           target: 'x86_64-windows-10'
-          imageName: 'vs2017-win2016'
-          LISP: sbcl-bin
-        linux_sbcl:
-          target: 'x86_64-unknown-linux-gnu'
-          imageName: 'ubuntu-16.04'
-          LISP: sbcl-bin
-        linux_ccl:
-          target: 'x86_64-unknown-linux-gnu'
-          imageName: 'ubuntu-16.04'
-          LISP: ccl-bin
-        mac_sbcl:
-          target: 'x86_64-apple-darwin'
-          imageName: 'macos-10.13'
-          LISP: sbcl-bin
+          imageName: 'windows-2022'
     pool:
       vmImage: $(imageName)
-
     steps:
-      # Install roswell
-      # Windows needs a seperate installation, due to differences in available tools
-      - bash: |
-          PATH=$PATH:$HOME/.roswell/bin:/etc/roswell/bin
-          echo "##vso[task.setvariable variable=PATH]$PATH" #Store the configured PATH for later steps
-          curl -L https://raw.githubusercontent.com/roswell/roswell/release/scripts/install-for-ci.sh | sh
-        displayName: Install Roswell for *nix
-        condition: ne( variables['Agent.OS'], 'Windows_NT' )
-      - pwsh: |
-          $env:Path += ";$(Agent.TempDirectory)\roswell;$env:USERPROFILE\.roswell\bin"
-          Write-Host "##vso[task.setvariable variable=PATH]$env:PATH" #Store the configured PATH for later steps.  It is important to do that here, because of complications in managing the type of slash in bash vs pwsh
-          Invoke-WebRequest -Uri "$(ROSWELL_ZIP)" -OutFile Roswell.zip
-          7z x -o"$(Agent.TempDirectory)" Roswell.zip
-          ros install $LISP
-          ros config
-        displayName: Install Roswell for Windows
-        condition: eq( variables['Agent.OS'], 'Windows_NT' )
-      - bash: |
-          set -e # Ensure Azure is informed of any failures
-          # install ci-utils and register the project's working directory with asdf
-          ros install neil-lindquist/ci-utils #for register project and run-fiveam
-          asdf-register-project
-          # Run the tests
-          run-fiveam -e t -l foo/test :foo-tests
-          #ros install prove
-          #run-prove foo.asd
-          #ros install rove
-          #rove foo.asd
-        displayName: Run Tests
+      - pwsh: Invoke-WebRequest -Uri $Env:ROSWELL_ZIP -OutFile Roswell.zip
+        displayName: Download roswell
+      - script: |
+            set PATH=%PATH%;%USERPROFILE%\roswell\
+            7z x -o%USERPROFILE% Roswell.zip
+            ros install %LISP%
+            ros config
+            mkdir "%LOCALAPPDATA%\config\common-lisp\source-registry.conf.d\"
+            set "dir=%AGENT_BUILDDIRECTORY:\=/%"
+            echo (:tree "%dir%") > "%LOCALAPPDATA%\config\common-lisp\source-registry.conf.d\ci.conf"
+        displayName: Unzip and configure
+      - script: |
+            set PATH=%PATH%;%USERPROFILE%\roswell\
+            ros -Q -- roswell/run-fiveam.ros -l ci-utils/test :azure-pipelines-tests :base-tests :noncoveralls-tests
+        displayName: Run tests
